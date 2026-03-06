@@ -13,7 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 // Serve static frontend files (like demo.html) from the root directory
-app.use(express.static(path.join(__dirname, '../../../')));
+app.use(express.static(path.join(__dirname, '../../')));
 
 setupRoutes(app);
 
