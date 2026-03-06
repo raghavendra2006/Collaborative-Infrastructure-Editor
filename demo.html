@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Infra Editor Demo</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; background: #1e1e2e; color: #cdd6f4; }
+        .log { background: #181825; padding: 20px; height: 400px; overflow-y: scroll; white-space: pre-wrap; font-family: 'Courier New', Courier, monospace; border-radius: 8px; border: 1px solid #313244; color: #a6e3a1; font-size: 14px;}
+        button { padding: 12px 20px; margin: 8px; background: #89b4fa; color: #11111b; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;}
+        button:hover { background: #b4befe; }
+        h1 { color: #89b4fa; margin-bottom: 30px;}
+        .button-group { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Infra Editor End-to-End Demo</h1>
+    <div class="button-group">
+        <button id="btn-create">1. Create Document</button>
+        <button id="btn-ws">2. Test WebSockets & OT Sync</button>
+        <button id="btn-commit-valid">3. Validation Pipeline (Valid)</button>
+        <button id="btn-commit-invalid">4. Validation Pipeline (Invalid)</button>
+        <button id="btn-metrics">5. Fetch Prometheus Metrics</button>
+    </div>
+    
+    <h3>Backend Response Log</h3>
+    <div id="log" class="log"></div>
+    
+    <script>
+        const logEl = document.getElementById('log');
+        function log(msg) { logEl.innerText += "> " + msg + "\n\n"; logEl.scrollTop = logEl.scrollHeight; }
+        
+        let docId = '';
+        
+        document.getElementById('btn-create').onclick = async () => {
+            log("Initializing new document via POST /api/v1/documents...");
+            const res = await fetch('http://localhost:8080/api/v1/documents', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: 'demo.yaml', content: 'apiVersion: v1'})
+            });
+            const data = await res.json();
+            docId = data.id;
+            log("Document successfully created with ID: " + docId);
+        };
+        
+        document.getElementById('btn-ws').onclick = async () => {
+            if(!docId) return log("❌ Please create a document first!");
+            log("Opening WebSockets for concurrent editing test...");
+            log("Connecting User A and User B to ws://localhost:8080/ws...");
+            const wsA = new WebSocket('ws://localhost:8080/ws');
+            const wsB = new WebSocket('ws://localhost:8080/ws');
+            
+            let opens = 0;
+            const onOpen = () => {
+                opens++;
+                if(opens === 2) {
+                    log("Both clients connected! Sending concurrent overlapping OT operations...");
+                    wsA.send(JSON.stringify({ document_id: docId, user_id: "clientA", revision: 1, operation: { type: "insert", position: 14, value: "\nkind: Pod" }}));
+                    wsB.send(JSON.stringify({ document_id: docId, user_id: "clientB", revision: 1, operation: { type: "insert", position: 14, value: "\nmetadata:" }}));
+                }
+            };
+            wsA.onopen = onOpen; wsB.onopen = onOpen;
+            
+            let msgs = 0;
+            const onMsg = (e) => {
+                log("Broadcast Received: " + e.data);
+                msgs++;
+                if(msgs === 4) {
+                    wsA.close(); wsB.close();
+                    log("✅ WebSocket OT synchronization completed perfectly.");
+                }
+            };
+            wsA.onmessage = onMsg; wsB.onmessage = onMsg;
+        };
+        
+        document.getElementById('btn-commit-valid').onclick = async () => {
+            log("Generating valid Kubernetes manifest for dry-run commit...");
+            const res1 = await fetch('http://localhost:8080/api/v1/documents', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: 'valid-pod.yaml', content: 'apiVersion: v1\nkind: Pod\nmetadata:\n  name: valid\n'})
+            });
+            const d1 = await res1.json();
+            log("Triggering POST /api/v1/documents/.../commit for ID " + d1.id);
+            const res2 = await fetch(`http://localhost:8080/api/v1/documents/${d1.id}/commit`, {method: 'POST'});
+            const data = await res2.json();
+            log("Result (Valid): " + JSON.stringify(data, null, 2));
+        };
+        
+        document.getElementById('btn-commit-invalid').onclick = async () => {
+            log("Generating invalid YAML syntax for failure test...");
+            const res1 = await fetch('http://localhost:8080/api/v1/documents', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: 'invalid.yaml', content: 'invalid: yaml: ['})
+            });
+            const d1 = await res1.json();
+            log("Triggering POST /api/v1/documents/.../commit for ID " + d1.id);
+            const res2 = await fetch(`http://localhost:8080/api/v1/documents/${d1.id}/commit`, {method: 'POST'});
+            const data = await res2.json();
+            log("Result (Invalid): " + JSON.stringify(data, null, 2));
+        };
+        
+        document.getElementById('btn-metrics').onclick = async () => {
+            log("Scraping GET /metrics...");
+            const res = await fetch('http://localhost:8080/metrics');
+            const text = await res.text();
+            const lines = text.split('\n').filter(l => l.includes('total') || l.includes('latency') || l.includes('snapshot')).slice(0, 10);
+            log("Prometheus Metrics Snippet:\n" + lines.join('\n'));
+        };
+    </script>
+</body>
+</html>
